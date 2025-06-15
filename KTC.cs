@@ -1,4 +1,4 @@
-﻿/*
+/*
  * =================================================================================
  * KSPTextureCompressor.cs (Final Version)
  * ---------------------------------------------
@@ -114,6 +114,10 @@ public class KSPTextureCompressor : MonoBehaviour
         GUILayout.Label("Managed Part Textures: " + Loader.GetManagedTextureCount());
         GUILayout.Label("Textures Currently in RAM: " + Loader.GetLoadedTextureCount());
         GUILayout.Label($"Est. Memory Saved: {Loader.GetEstimatedMemorySavedMB():F2} MB");
+
+        if (Loader.GetManagedTextureCount() == 0)
+            GUILayout.Label("<color=yellow>No textures found to manage. Check your settings or part configs.</color>");
+
         GUILayout.Space(10);
 
         if (isPreCachingUI)
@@ -127,6 +131,7 @@ public class KSPTextureCompressor : MonoBehaviour
             if (GUILayout.Button("Re-Scan for All Textures")) { StartCoroutine(Loader.RescanForTextures()); }
             if (GUILayout.Button("Pre-Cache All Textures")) { StartCoroutine(PreCacheUITask()); }
             if (GUILayout.Button("Clear Texture Cache")) { Loader.ClearCache(); ScreenMessages.PostScreenMessage("Cache cleared. Restart KSP.", 5f, ScreenMessageStyle.UPPER_CENTER); }
+            if (GUILayout.Button("Reload Settings")) { Loader.ReloadConfig(); }
         }
         GUILayout.EndVertical();
         GUI.DragWindow();
@@ -210,6 +215,11 @@ public class OnDemandLoader
         return (originalSize - compressedSize) / 1024f / 1024f;
     }
     public void ClearCache() { try { if (Directory.Exists(cachePath)) { Directory.Delete(cachePath, true); Directory.CreateDirectory(cachePath); } } catch (System.Exception e) { Debug.LogError($"[KerbalTextureManager] Failed to clear cache: {e.Message}"); } }
+    public void ReloadConfig()
+    {
+        config = new ConfigManager();
+        Debug.Log("[KerbalTextureManager] Config reloaded.");
+    }
     #endregion
 
     #region Event Handlers
@@ -319,6 +329,12 @@ public class OnDemandLoader
         managedPartTextures.Clear();
         originalTextureSizes.Clear();
 
+        if (GameDatabase.Instance == null)
+        {
+            Debug.LogError("[KerbalTextureManager] GameDatabase.Instance is null! Cannot build texture whitelist.");
+            yield break;
+        }
+
         foreach (AvailablePart partInfo in PartLoader.LoadedPartsList)
         {
             if (partInfo?.partConfig == null) continue;
@@ -385,6 +401,22 @@ public class OnDemandLoader
             }
             yield return null;
         }
+
+        // Fallback: Add all textures in GameDatabase that are not blacklisted
+        foreach (var tex in GameDatabase.Instance.databaseTexture)
+        {
+            if (tex == null || string.IsNullOrEmpty(tex.name)) continue;
+            if (managedPartTextures.ContainsKey(tex.name)) continue;
+            if (config.IsBlacklisted(tex.name)) continue;
+
+            var fileInfo = GameDatabase.Instance.GetTextureInfo(tex.name);
+            if (fileInfo != null && fileInfo.file != null && File.Exists(fileInfo.file.fullPath))
+            {
+                managedPartTextures.Add(tex.name, fileInfo.file.fullPath);
+                originalTextureSizes.Add(tex.name, new FileInfo(fileInfo.file.fullPath).Length);
+            }
+        }
+        Debug.Log($"[KerbalTextureManager] Whitelist built: {managedPartTextures.Count} textures managed.");
     }
 
     public IEnumerator RescanForTextures()
@@ -516,22 +548,29 @@ public class ConfigManager
     {
         string configPath = Path.Combine(KSPTextureCompressor.ModFolderPath, "settings.cfg");
         if (!File.Exists(configPath)) return;
-        ConfigNode node = ConfigNode.Load(configPath);
-        if (node == null) return;
-
-        float.TryParse(node.GetValue("garbage_collection_interval"), out float interval);
-        GarbageCollectionInterval = interval > 0 ? interval : 30f;
-
-        foreach (var blackListEntry in node.GetValues("blacklist"))
+        try
         {
-            blacklist.Add(blackListEntry.Trim());
-        }
+            ConfigNode node = ConfigNode.Load(configPath);
+            if (node == null) return;
 
-        if (node.HasValue("normal_map_suffixes"))
-        {
-            normalMapSuffixes = node.GetValue("normal_map_suffixes").Split(',').Select(s => s.Trim()).ToList();
+            float.TryParse(node.GetValue("garbage_collection_interval"), out float interval);
+            GarbageCollectionInterval = interval > 0 ? interval : 30f;
+
+            foreach (var blackListEntry in node.GetValues("blacklist"))
+            {
+                blacklist.Add(blackListEntry.Trim());
+            }
+
+            if (node.HasValue("normal_map_suffixes"))
+            {
+                normalMapSuffixes = node.GetValue("normal_map_suffixes").Split(',').Select(s => s.Trim()).ToList();
+            }
+            Debug.Log($"[KerbalTextureManager] Loaded {blacklist.Count} blacklist entries and {normalMapSuffixes.Count} normal map suffixes.");
         }
-        Debug.Log($"[KerbalTextureManager] Loaded {blacklist.Count} blacklist entries and {normalMapSuffixes.Count} normal map suffixes.");
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"[KerbalTextureManager] Failed to load settings.cfg: {ex}");
+        }
     }
 
     public bool IsBlacklisted(string textureName)
