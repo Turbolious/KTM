@@ -331,8 +331,15 @@ public class OnDemandLoader
                 string[] textureValues = node.GetValues("texture");
                 foreach (string val in textureValues)
                 {
-                    string textureName = val.Split(',')[0].Trim();
-                    string textureDirectory = val.Split(',')[1].Trim();
+                    string[] split = val.Split(',');
+                    if (split.Length < 2)
+                    {
+                        Debug.LogWarning($"[KerbalTextureManager] Unexpected texture directive '{val}' in {partInfo.name}");
+                        continue;
+                    }
+
+                    string textureName = split[0].Trim();
+                    string textureDirectory = split[1].Trim();
 
                     if (config.IsBlacklisted(textureName)) continue;
 
@@ -345,6 +352,34 @@ public class OnDemandLoader
                             managedPartTextures.Add(texInfo.name, fileInfo.file.fullPath);
                             originalTextureSizes.Add(texInfo.name, new FileInfo(fileInfo.file.fullPath).Length);
                         }
+                    }
+                }
+            }
+
+            // Some legacy parts define texture overrides directly on the PART node
+            string[] rootTextures = partInfo.partConfig.GetValues("texture");
+            foreach (string val in rootTextures)
+            {
+                string[] split = val.Split(',');
+                if (split.Length < 2)
+                {
+                    Debug.LogWarning($"[KerbalTextureManager] Unexpected texture directive '{val}' in {partInfo.name}");
+                    continue;
+                }
+
+                string textureName = split[0].Trim();
+                string textureDirectory = split[1].Trim();
+
+                if (config.IsBlacklisted(textureName)) continue;
+
+                var texInfo = GameDatabase.Instance.GetTexture(textureDirectory + "/" + textureName, false);
+                if (texInfo != null)
+                {
+                    var fileInfo = GameDatabase.Instance.GetTextureInfo(texInfo.name);
+                    if (fileInfo != null && !managedPartTextures.ContainsKey(texInfo.name))
+                    {
+                        managedPartTextures.Add(texInfo.name, fileInfo.file.fullPath);
+                        originalTextureSizes.Add(texInfo.name, new FileInfo(fileInfo.file.fullPath).Length);
                     }
                 }
             }
